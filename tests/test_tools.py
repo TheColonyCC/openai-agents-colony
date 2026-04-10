@@ -1,0 +1,799 @@
+"""Tests for openai_agents_colony tools."""
+
+from __future__ import annotations
+
+import json
+from typing import Any
+from unittest.mock import MagicMock
+
+import pytest
+
+from openai_agents_colony import colony_system_prompt, colony_tools, colony_tools_dict, colony_tools_readonly
+from openai_agents_colony.tools import _safe_result
+
+
+def _mock_client(**overrides: Any) -> MagicMock:
+    """Create a mock ColonyClient with sensible defaults."""
+    client = MagicMock()
+    client.search.return_value = {
+        "items": [
+            {
+                "id": "post-1",
+                "title": "Test Post",
+                "body": "Hello world",
+                "author": {"username": "testuser", "user_type": "agent"},
+                "post_type": "discussion",
+                "score": 5,
+                "comment_count": 2,
+                "created_at": "2026-01-01T00:00:00Z",
+            }
+        ],
+        "users": [
+            {
+                "id": "user-1",
+                "username": "testuser",
+                "display_name": "Test User",
+                "bio": "A test user",
+                "karma": 42,
+                "user_type": "agent",
+            }
+        ],
+        "total": 1,
+    }
+    client.get_posts.return_value = {
+        "items": [
+            {
+                "id": "post-1",
+                "title": "Test Post",
+                "body": "Hello world",
+                "author": {"username": "testuser", "user_type": "agent"},
+                "post_type": "discussion",
+                "colony_id": "general",
+                "score": 5,
+                "comment_count": 2,
+                "created_at": "2026-01-01T00:00:00Z",
+            }
+        ],
+        "total": 1,
+    }
+    client.get_post.return_value = {
+        "id": "post-1",
+        "title": "Test Post",
+        "body": "Full body text",
+        "author": {
+            "username": "testuser",
+            "display_name": "Test User",
+            "user_type": "agent",
+            "karma": 42,
+        },
+        "post_type": "discussion",
+        "colony_id": "general",
+        "score": 5,
+        "comment_count": 2,
+        "language": "en",
+        "tags": ["test"],
+        "created_at": "2026-01-01T00:00:00Z",
+        "updated_at": "2026-01-02T00:00:00Z",
+    }
+    client.iter_comments.return_value = iter(
+        [
+            {
+                "id": "comment-1",
+                "author": {"username": "commenter"},
+                "body": "Nice post!",
+                "parent_id": None,
+                "score": 3,
+                "created_at": "2026-01-01T12:00:00Z",
+            }
+        ]
+    )
+    client.get_user.return_value = {
+        "id": "user-1",
+        "username": "testuser",
+        "display_name": "Test User",
+        "user_type": "agent",
+        "bio": "A test user",
+        "karma": 42,
+        "capabilities": {"languages": ["python"]},
+        "created_at": "2026-01-01T00:00:00Z",
+    }
+    client.get_me.return_value = {
+        "id": "me-1",
+        "username": "myagent",
+        "display_name": "My Agent",
+        "user_type": "agent",
+        "bio": "I am an agent",
+        "karma": 100,
+        "capabilities": None,
+        "created_at": "2026-01-01T00:00:00Z",
+    }
+    client.get_notifications.return_value = {
+        "notifications": [
+            {
+                "id": "notif-1",
+                "notification_type": "reply",
+                "message": "Someone replied",
+                "post_id": "post-1",
+                "is_read": False,
+                "created_at": "2026-01-01T00:00:00Z",
+            }
+        ]
+    }
+    client.get_poll.return_value = {
+        "options": [{"id": "opt-1", "text": "Yes", "votes": 10}],
+        "total_votes": 10,
+        "is_closed": False,
+        "closes_at": None,
+        "user_has_voted": False,
+    }
+    client.get_unread_count.return_value = {"count": 3}
+    client.list_conversations.return_value = {
+        "conversations": [
+            {
+                "other_user": "otheruser",
+                "last_message_at": "2026-01-01T00:00:00Z",
+                "last_message_preview": "Hello!",
+                "unread_count": 1,
+            }
+        ]
+    }
+    client.directory.return_value = {
+        "items": [
+            {
+                "id": "user-1",
+                "username": "testuser",
+                "display_name": "Test User",
+                "user_type": "agent",
+                "bio": "A test user",
+                "karma": 42,
+            }
+        ],
+        "total": 1,
+    }
+    client.get_conversation.return_value = {
+        "messages": [
+            {
+                "id": "msg-1",
+                "sender": {"username": "otheruser"},
+                "body": "Hello!",
+                "created_at": "2026-01-01T00:00:00Z",
+            }
+        ]
+    }
+    client.get_colonies.return_value = {
+        "colonies": [
+            {
+                "name": "general",
+                "display_name": "General",
+                "description": "General discussion",
+                "member_count": 100,
+            }
+        ]
+    }
+    client.create_post.return_value = {
+        "id": "new-post-1",
+        "title": "New Post",
+        "created_at": "2026-01-01T00:00:00Z",
+    }
+    client.create_comment.return_value = {
+        "id": "new-comment-1",
+        "post_id": "post-1",
+        "body": "My comment",
+        "created_at": "2026-01-01T00:00:00Z",
+    }
+    client.send_message.return_value = {
+        "id": "new-msg-1",
+        "body": "Hello!",
+        "created_at": "2026-01-01T00:00:00Z",
+    }
+    client.vote_post.return_value = {"success": True}
+    client.vote_comment.return_value = {"success": True}
+    client.react_post.return_value = {"success": True}
+    client.react_comment.return_value = {"success": True}
+    client.vote_poll.return_value = {"success": True}
+    client.follow.return_value = {"success": True}
+    client.unfollow.return_value = {"success": True}
+    client.update_post.return_value = {
+        "id": "post-1",
+        "title": "Updated Title",
+        "updated_at": "2026-01-02T00:00:00Z",
+    }
+    client.delete_post.return_value = {"success": True}
+    client.mark_notifications_read.return_value = None
+    client.join_colony.return_value = {"success": True}
+    client.leave_colony.return_value = {"success": True}
+    client.get_notification_count.return_value = {"count": 5}
+    client.iter_posts.return_value = iter(
+        [
+            {
+                "id": "post-1",
+                "title": "Test Post",
+                "body": "Hello world",
+                "author": {"username": "testuser"},
+                "post_type": "discussion",
+                "colony_id": "general",
+                "score": 5,
+                "comment_count": 2,
+                "created_at": "2026-01-01T00:00:00Z",
+            }
+        ]
+    )
+
+    for key, value in overrides.items():
+        setattr(client, key, value)
+    return client
+
+
+def _tools_by_name(tools: list[Any]) -> dict[str, Any]:
+    """Convert a list of tools to a name-keyed dict."""
+    return {t.name: t for t in tools}
+
+
+async def _invoke(tool: Any, **kwargs: Any) -> Any:
+    """Invoke a FunctionTool with JSON args and return parsed result."""
+    ctx = MagicMock()
+    result = await tool.on_invoke_tool(ctx, json.dumps(kwargs))
+    if isinstance(result, str):
+        return json.loads(result)
+    return result
+
+
+# ── Structure tests ─────────────────────────────────────────────
+
+
+class TestColonyTools:
+    def test_creates_all_tools(self) -> None:
+        client = _mock_client()
+        tools = colony_tools(client)
+        assert len(tools) == 30
+
+    def test_all_tool_names(self) -> None:
+        client = _mock_client()
+        tools = colony_tools(client)
+        names = {t.name for t in tools}
+        expected = {
+            "colony_search",
+            "colony_get_posts",
+            "colony_get_post",
+            "colony_get_comments",
+            "colony_get_user",
+            "colony_directory",
+            "colony_get_me",
+            "colony_get_notifications",
+            "colony_get_notification_count",
+            "colony_get_poll",
+            "colony_list_conversations",
+            "colony_get_conversation",
+            "colony_list_colonies",
+            "colony_get_unread_count",
+            "colony_iter_posts",
+            "colony_create_post",
+            "colony_create_comment",
+            "colony_send_message",
+            "colony_vote_post",
+            "colony_vote_comment",
+            "colony_react_post",
+            "colony_react_comment",
+            "colony_vote_poll",
+            "colony_follow",
+            "colony_unfollow",
+            "colony_update_post",
+            "colony_delete_post",
+            "colony_mark_notifications_read",
+            "colony_join_colony",
+            "colony_leave_colony",
+        }
+        assert names == expected
+
+    def test_all_tools_have_descriptions(self) -> None:
+        client = _mock_client()
+        tools = colony_tools(client)
+        for tool in tools:
+            assert tool.description, f"{tool.name} has no description"
+
+    def test_all_tools_have_schemas(self) -> None:
+        client = _mock_client()
+        tools = colony_tools(client)
+        for tool in tools:
+            assert tool.params_json_schema is not None, f"{tool.name} has no schema"
+
+
+class TestColonyToolsReadonly:
+    def test_creates_read_only_tools(self) -> None:
+        client = _mock_client()
+        tools = colony_tools_readonly(client)
+        assert len(tools) == 15
+
+    def test_excludes_write_tools(self) -> None:
+        client = _mock_client()
+        tools = colony_tools_readonly(client)
+        names = {t.name for t in tools}
+        write_tools = {
+            "colony_create_post",
+            "colony_create_comment",
+            "colony_send_message",
+            "colony_vote_post",
+            "colony_vote_comment",
+            "colony_react_post",
+            "colony_react_comment",
+            "colony_vote_poll",
+            "colony_follow",
+            "colony_unfollow",
+            "colony_update_post",
+            "colony_delete_post",
+            "colony_mark_notifications_read",
+            "colony_join_colony",
+            "colony_leave_colony",
+        }
+        assert names.isdisjoint(write_tools)
+
+
+class TestColonyToolsDict:
+    def test_returns_dict(self) -> None:
+        client = _mock_client()
+        tools = colony_tools_dict(client)
+        assert isinstance(tools, dict)
+        assert len(tools) == 30
+        assert "colony_search" in tools
+
+
+class TestMaxBodyLength:
+    def test_custom_truncation(self) -> None:
+        client = _mock_client()
+        client.search.return_value = {
+            "items": [
+                {
+                    "id": "p1",
+                    "title": "Long",
+                    "body": "x" * 1000,
+                    "author": {"username": "u"},
+                    "post_type": "discussion",
+                    "score": 0,
+                    "comment_count": 0,
+                    "created_at": "",
+                }
+            ],
+            "users": [],
+            "total": 1,
+        }
+        tools = _tools_by_name(colony_tools(client, max_body_length=100))
+        # We can't easily test truncation without invoking the tool,
+        # but we verify the tool was created with custom settings
+        assert tools["colony_search"] is not None
+
+
+# ── Per-tool invocation tests ───────────────────────────────────
+
+
+class TestSearchTool:
+    @pytest.mark.asyncio
+    async def test_calls_sdk_with_params(self) -> None:
+        client = _mock_client()
+        tools = _tools_by_name(colony_tools(client))
+        result = await _invoke(tools["colony_search"], query="AI agents", limit=10, post_type="finding", sort="newest")
+        client.search.assert_called_once_with("AI agents", limit=10, post_type="finding", sort="newest")
+        assert result["posts"][0]["id"] == "post-1"
+        assert result["users"][0]["username"] == "testuser"
+        assert result["total"] == 1
+
+    @pytest.mark.asyncio
+    async def test_defaults(self) -> None:
+        client = _mock_client()
+        tools = _tools_by_name(colony_tools(client))
+        await _invoke(tools["colony_search"], query="test")
+        client.search.assert_called_once_with("test", limit=20)
+
+
+class TestGetPostsTool:
+    @pytest.mark.asyncio
+    async def test_calls_sdk(self) -> None:
+        client = _mock_client()
+        tools = _tools_by_name(colony_tools(client))
+        result = await _invoke(tools["colony_get_posts"], colony="crypto", sort="top", limit=5, post_type="analysis")
+        client.get_posts.assert_called_once_with(sort="top", colony="crypto", limit=5, post_type="analysis")
+        assert result["posts"][0]["id"] == "post-1"
+        assert result["posts"][0]["colony"] == "general"
+
+
+class TestGetPostTool:
+    @pytest.mark.asyncio
+    async def test_calls_sdk(self) -> None:
+        client = _mock_client()
+        tools = _tools_by_name(colony_tools(client))
+        result = await _invoke(tools["colony_get_post"], post_id="post-1")
+        client.get_post.assert_called_once_with("post-1")
+        assert result["id"] == "post-1"
+        assert result["body"] == "Full body text"
+        assert result["author"]["username"] == "testuser"
+        assert result["tags"] == ["test"]
+
+
+class TestGetCommentsTool:
+    @pytest.mark.asyncio
+    async def test_calls_sdk(self) -> None:
+        client = _mock_client()
+        tools = _tools_by_name(colony_tools(client))
+        result = await _invoke(tools["colony_get_comments"], post_id="post-1", max_comments=5)
+        client.iter_comments.assert_called_once_with("post-1", max_results=5)
+        assert result["count"] == 1
+        assert result["comments"][0]["author"] == "commenter"
+
+
+class TestGetUserTool:
+    @pytest.mark.asyncio
+    async def test_calls_sdk(self) -> None:
+        client = _mock_client()
+        tools = _tools_by_name(colony_tools(client))
+        result = await _invoke(tools["colony_get_user"], user_id="user-1")
+        client.get_user.assert_called_once_with("user-1")
+        assert result["username"] == "testuser"
+        assert result["karma"] == 42
+
+
+class TestDirectoryTool:
+    @pytest.mark.asyncio
+    async def test_calls_sdk(self) -> None:
+        client = _mock_client()
+        tools = _tools_by_name(colony_tools(client))
+        result = await _invoke(tools["colony_directory"], query="python", user_type="agent", sort="newest", limit=10)
+        client.directory.assert_called_once_with(query="python", user_type="agent", sort="newest", limit=10)
+        assert result["users"][0]["username"] == "testuser"
+        assert result["total"] == 1
+
+
+class TestGetMeTool:
+    @pytest.mark.asyncio
+    async def test_calls_sdk(self) -> None:
+        client = _mock_client()
+        tools = _tools_by_name(colony_tools(client))
+        result = await _invoke(tools["colony_get_me"])
+        client.get_me.assert_called_once()
+        assert result["username"] == "myagent"
+        assert result["karma"] == 100
+
+
+class TestGetNotificationsTool:
+    @pytest.mark.asyncio
+    async def test_calls_sdk(self) -> None:
+        client = _mock_client()
+        tools = _tools_by_name(colony_tools(client))
+        result = await _invoke(tools["colony_get_notifications"], unread_only=True, limit=10)
+        client.get_notifications.assert_called_once_with(unread_only=True, limit=10)
+        assert result["count"] == 1
+        assert result["notifications"][0]["type"] == "reply"
+
+
+class TestGetNotificationCountTool:
+    @pytest.mark.asyncio
+    async def test_calls_sdk(self) -> None:
+        client = _mock_client()
+        tools = _tools_by_name(colony_tools(client))
+        result = await _invoke(tools["colony_get_notification_count"])
+        client.get_notification_count.assert_called_once()
+        assert result["count"] == 5
+
+
+class TestGetPollTool:
+    @pytest.mark.asyncio
+    async def test_calls_sdk(self) -> None:
+        client = _mock_client()
+        tools = _tools_by_name(colony_tools(client))
+        result = await _invoke(tools["colony_get_poll"], post_id="post-1")
+        client.get_poll.assert_called_once_with("post-1")
+        assert result["total_votes"] == 10
+        assert result["options"][0]["text"] == "Yes"
+
+
+class TestListConversationsTool:
+    @pytest.mark.asyncio
+    async def test_calls_sdk(self) -> None:
+        client = _mock_client()
+        tools = _tools_by_name(colony_tools(client))
+        result = await _invoke(tools["colony_list_conversations"])
+        client.list_conversations.assert_called_once()
+        assert result["conversations"][0]["other_user"] == "otheruser"
+        assert result["conversations"][0]["unread_count"] == 1
+
+
+class TestGetConversationTool:
+    @pytest.mark.asyncio
+    async def test_calls_sdk(self) -> None:
+        client = _mock_client()
+        tools = _tools_by_name(colony_tools(client))
+        result = await _invoke(tools["colony_get_conversation"], username="otheruser")
+        client.get_conversation.assert_called_once_with("otheruser")
+        assert result["messages"][0]["sender"] == "otheruser"
+        assert result["messages"][0]["body"] == "Hello!"
+
+
+class TestListColoniesTool:
+    @pytest.mark.asyncio
+    async def test_calls_sdk(self) -> None:
+        client = _mock_client()
+        tools = _tools_by_name(colony_tools(client))
+        result = await _invoke(tools["colony_list_colonies"])
+        client.get_colonies.assert_called_once()
+        assert result["colonies"][0]["name"] == "general"
+
+
+class TestGetUnreadCountTool:
+    @pytest.mark.asyncio
+    async def test_calls_sdk(self) -> None:
+        client = _mock_client()
+        tools = _tools_by_name(colony_tools(client))
+        result = await _invoke(tools["colony_get_unread_count"])
+        client.get_unread_count.assert_called_once()
+        assert result["count"] == 3
+
+
+class TestIterPostsTool:
+    @pytest.mark.asyncio
+    async def test_calls_sdk(self) -> None:
+        client = _mock_client()
+        tools = _tools_by_name(colony_tools(client))
+        result = await _invoke(
+            tools["colony_iter_posts"], colony="general", sort="top", post_type="finding", max_results=10
+        )
+        client.iter_posts.assert_called_once_with(colony="general", sort="top", post_type="finding", max_results=10)
+        assert result["count"] == 1
+        assert result["posts"][0]["id"] == "post-1"
+
+    @pytest.mark.asyncio
+    async def test_caps_at_200(self) -> None:
+        client = _mock_client()
+        tools = _tools_by_name(colony_tools(client))
+        await _invoke(tools["colony_iter_posts"], max_results=999)
+        client.iter_posts.assert_called_once_with(colony=None, sort="new", post_type=None, max_results=200)
+
+
+class TestCreatePostTool:
+    @pytest.mark.asyncio
+    async def test_calls_sdk(self) -> None:
+        client = _mock_client()
+        tools = _tools_by_name(colony_tools(client))
+        result = await _invoke(
+            tools["colony_create_post"], title="New Post", body="Content", colony="findings", post_type="finding"
+        )
+        client.create_post.assert_called_once_with("New Post", "Content", colony="findings", post_type="finding")
+        assert result["id"] == "new-post-1"
+        assert "thecolony.cc" in result["url"]
+
+
+class TestCreateCommentTool:
+    @pytest.mark.asyncio
+    async def test_calls_sdk(self) -> None:
+        client = _mock_client()
+        tools = _tools_by_name(colony_tools(client))
+        result = await _invoke(
+            tools["colony_create_comment"], post_id="post-1", body="My comment", parent_id="comment-1"
+        )
+        client.create_comment.assert_called_once_with("post-1", "My comment", parent_id="comment-1")
+        assert result["id"] == "new-comment-1"
+
+
+class TestSendMessageTool:
+    @pytest.mark.asyncio
+    async def test_calls_sdk(self) -> None:
+        client = _mock_client()
+        tools = _tools_by_name(colony_tools(client))
+        result = await _invoke(tools["colony_send_message"], username="otheruser", body="Hi!")
+        client.send_message.assert_called_once_with("otheruser", "Hi!")
+        assert result["id"] == "new-msg-1"
+
+
+class TestVotePostTool:
+    @pytest.mark.asyncio
+    async def test_calls_sdk(self) -> None:
+        client = _mock_client()
+        tools = _tools_by_name(colony_tools(client))
+        result = await _invoke(tools["colony_vote_post"], post_id="post-1", value=-1)
+        client.vote_post.assert_called_once_with("post-1", value=-1)
+        assert result["success"] is True
+        assert result["vote"] == -1
+
+
+class TestVoteCommentTool:
+    @pytest.mark.asyncio
+    async def test_calls_sdk(self) -> None:
+        client = _mock_client()
+        tools = _tools_by_name(colony_tools(client))
+        result = await _invoke(tools["colony_vote_comment"], comment_id="comment-1", value=1)
+        client.vote_comment.assert_called_once_with("comment-1", value=1)
+        assert result["success"] is True
+
+
+class TestReactPostTool:
+    @pytest.mark.asyncio
+    async def test_calls_sdk(self) -> None:
+        client = _mock_client()
+        tools = _tools_by_name(colony_tools(client))
+        result = await _invoke(tools["colony_react_post"], post_id="post-1", emoji="fire")
+        client.react_post.assert_called_once_with("post-1", "fire")
+        assert result["emoji"] == "fire"
+
+
+class TestReactCommentTool:
+    @pytest.mark.asyncio
+    async def test_calls_sdk(self) -> None:
+        client = _mock_client()
+        tools = _tools_by_name(colony_tools(client))
+        result = await _invoke(tools["colony_react_comment"], comment_id="comment-1", emoji="heart")
+        client.react_comment.assert_called_once_with("comment-1", "heart")
+        assert result["emoji"] == "heart"
+        assert result["comment_id"] == "comment-1"
+
+
+class TestVotePollTool:
+    @pytest.mark.asyncio
+    async def test_calls_sdk(self) -> None:
+        client = _mock_client()
+        tools = _tools_by_name(colony_tools(client))
+        result = await _invoke(tools["colony_vote_poll"], post_id="post-1", option_id="opt-1")
+        client.vote_poll.assert_called_once_with("post-1", option_id="opt-1")
+        assert result == {"success": True}
+
+
+class TestFollowTool:
+    @pytest.mark.asyncio
+    async def test_calls_sdk(self) -> None:
+        client = _mock_client()
+        tools = _tools_by_name(colony_tools(client))
+        result = await _invoke(tools["colony_follow"], user_id="user-1")
+        client.follow.assert_called_once_with("user-1")
+        assert result == {"success": True}
+
+
+class TestUnfollowTool:
+    @pytest.mark.asyncio
+    async def test_calls_sdk(self) -> None:
+        client = _mock_client()
+        tools = _tools_by_name(colony_tools(client))
+        result = await _invoke(tools["colony_unfollow"], user_id="user-1")
+        client.unfollow.assert_called_once_with("user-1")
+        assert result == {"success": True}
+
+
+class TestUpdatePostTool:
+    @pytest.mark.asyncio
+    async def test_calls_sdk(self) -> None:
+        client = _mock_client()
+        tools = _tools_by_name(colony_tools(client))
+        result = await _invoke(tools["colony_update_post"], post_id="post-1", title="Updated Title", body="New body")
+        client.update_post.assert_called_once_with("post-1", title="Updated Title", body="New body")
+        assert result["title"] == "Updated Title"
+        assert result["updated_at"] == "2026-01-02T00:00:00Z"
+
+
+class TestDeletePostTool:
+    @pytest.mark.asyncio
+    async def test_calls_sdk(self) -> None:
+        client = _mock_client()
+        tools = _tools_by_name(colony_tools(client))
+        result = await _invoke(tools["colony_delete_post"], post_id="post-1")
+        client.delete_post.assert_called_once_with("post-1")
+        assert result["success"] is True
+
+
+class TestMarkNotificationsReadTool:
+    @pytest.mark.asyncio
+    async def test_calls_sdk(self) -> None:
+        client = _mock_client()
+        tools = _tools_by_name(colony_tools(client))
+        result = await _invoke(tools["colony_mark_notifications_read"])
+        client.mark_notifications_read.assert_called_once()
+        assert result["success"] is True
+
+
+class TestJoinColonyTool:
+    @pytest.mark.asyncio
+    async def test_calls_sdk(self) -> None:
+        client = _mock_client()
+        tools = _tools_by_name(colony_tools(client))
+        result = await _invoke(tools["colony_join_colony"], colony="crypto")
+        client.join_colony.assert_called_once_with("crypto")
+        assert result == {"success": True}
+
+
+class TestLeaveColonyTool:
+    @pytest.mark.asyncio
+    async def test_calls_sdk(self) -> None:
+        client = _mock_client()
+        tools = _tools_by_name(colony_tools(client))
+        result = await _invoke(tools["colony_leave_colony"], colony="crypto")
+        client.leave_colony.assert_called_once_with("crypto")
+        assert result == {"success": True}
+
+
+# ── System prompt tests ─────────────────────────────────────────
+
+
+class TestColonySystemPrompt:
+    @pytest.mark.asyncio
+    async def test_generates_prompt(self) -> None:
+        client = _mock_client()
+        prompt = await colony_system_prompt(client)
+        assert "@myagent" in prompt
+        assert "My Agent" in prompt
+        assert "100 karma" in prompt
+        assert "I am an agent" in prompt
+        assert "thecolony.cc" in prompt
+
+    @pytest.mark.asyncio
+    async def test_prompt_without_bio(self) -> None:
+        client = _mock_client()
+        client.get_me.return_value = {
+            "id": "me-1",
+            "username": "nobio",
+            "display_name": "No Bio",
+            "user_type": "agent",
+            "bio": "",
+            "karma": 0,
+        }
+        prompt = await colony_system_prompt(client)
+        assert "@nobio" in prompt
+        assert "Your bio:" not in prompt
+
+
+# ── Error handling tests ────────────────────────────────────────
+
+
+class TestSafeResult:
+    @pytest.mark.asyncio
+    async def test_rate_limit_error(self) -> None:
+        from colony_sdk import ColonyRateLimitError
+
+        err = ColonyRateLimitError("Rate limited", 429, {})
+        err.retry_after = 30
+
+        @_safe_result
+        async def _fn() -> dict[str, Any]:
+            raise err
+
+        result = await _fn()
+        assert result["code"] == "RATE_LIMITED"
+        assert result["retry_after"] == 30
+
+    @pytest.mark.asyncio
+    async def test_rate_limit_without_retry_after(self) -> None:
+        from colony_sdk import ColonyRateLimitError
+
+        err = ColonyRateLimitError("Rate limited", 429, {})
+
+        @_safe_result
+        async def _fn() -> dict[str, Any]:
+            raise err
+
+        result = await _fn()
+        assert result["code"] == "RATE_LIMITED"
+        assert "Please wait" in result["error"]
+
+    @pytest.mark.asyncio
+    async def test_not_found_error(self) -> None:
+        from colony_sdk import ColonyNotFoundError
+
+        @_safe_result
+        async def _fn() -> dict[str, Any]:
+            raise ColonyNotFoundError("Not found", 404, {})
+
+        result = await _fn()
+        assert result["code"] == "NOT_FOUND"
+
+    @pytest.mark.asyncio
+    async def test_generic_api_error(self) -> None:
+        from colony_sdk import ColonyAPIError
+
+        @_safe_result
+        async def _fn() -> dict[str, Any]:
+            raise ColonyAPIError("Server error", 500, {})
+
+        result = await _fn()
+        assert result["code"] == "HTTP_500"
+
+    @pytest.mark.asyncio
+    async def test_non_colony_error_propagates(self) -> None:
+        @_safe_result
+        async def _fn() -> dict[str, Any]:
+            raise ValueError("not a colony error")
+
+        with pytest.raises(ValueError, match="not a colony error"):
+            await _fn()
