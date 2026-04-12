@@ -2,14 +2,23 @@
 
 from __future__ import annotations
 
+import hashlib
+import hmac
 import json
 from typing import Any
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 from colony_sdk.async_client import AsyncColonyClient
 
-from openai_agents_colony import colony_system_prompt, colony_tools, colony_tools_dict, colony_tools_readonly
+from openai_agents_colony import (
+    colony_register,
+    colony_system_prompt,
+    colony_tools,
+    colony_tools_dict,
+    colony_tools_readonly,
+    colony_verify_webhook,
+)
 from openai_agents_colony.tools import _call, _safe_result
 
 
@@ -1037,3 +1046,123 @@ class TestDefensiveFallbacks:
         tools = _tools_by_name(colony_tools(client))
         result = await _invoke(tools["colony_list_colonies"])
         assert result == {"colonies": []}
+
+
+# ── Standalone tools (no client required) ──────────────────────────
+
+
+class TestColonyRegisterTool:
+    @pytest.mark.asyncio
+    async def test_returns_api_key_on_success(self) -> None:
+        # ColonyClient.register is a static method on the SDK class.
+        # Patch it for the duration of the test.
+        with patch("openai_agents_colony.tools.ColonyClient.register") as register:
+            register.return_value = {
+                "id": "user-new-1",
+                "username": "newagent",
+                "display_name": "New Agent",
+                "api_key": "col_freshly_minted_key",
+            }
+            result = await _invoke(
+                colony_register,
+                username="newagent",
+                display_name="New Agent",
+                bio="A brand-new agent",
+            )
+            register.assert_called_once_with("newagent", "New Agent", "A brand-new agent")
+            assert result["api_key"] == "col_freshly_minted_key"
+            assert result["username"] == "newagent"
+            assert result["id"] == "user-new-1"
+
+    @pytest.mark.asyncio
+    async def test_handles_username_taken_error(self) -> None:
+        from colony_sdk import ColonyAPIError
+
+        with patch("openai_agents_colony.tools.ColonyClient.register") as register:
+            register.side_effect = ColonyAPIError("Username already taken", 409, {})
+            result = await _invoke(
+                colony_register,
+                username="taken",
+                display_name="Taken",
+                bio="...",
+            )
+            # _safe_result wraps API errors as a structured error dict
+            # rather than raising — the LLM gets a clear failure signal
+            # without crashing the run.
+            assert result["code"] == "HTTP_409"
+            assert "already taken" in result["error"]
+
+    @pytest.mark.asyncio
+    async def test_does_not_require_client(self) -> None:
+        # The whole point of this tool: it's importable and usable without
+        # an authenticated ColonyClient. Just verify the FunctionTool exists
+        # and exposes the expected name/schema.
+        assert colony_register.name == "colony_register"
+        assert colony_register.params_json_schema is not None
+        # Required params should be username/display_name/bio
+        required = set(colony_register.params_json_schema.get("required", []))
+        assert {"username", "display_name", "bio"} <= required
+
+
+class TestColonyVerifyWebhookTool:
+    @pytest.mark.asyncio
+    async def test_valid_signature(self) -> None:
+        secret = "supersecret"
+        payload = '{"event": "post.created"}'
+        sig = hmac.new(secret.encode(), payload.encode(), hashlib.sha256).hexdigest()
+        result = await _invoke(
+            colony_verify_webhook,
+            payload=payload,
+            signature=sig,
+            secret=secret,
+        )
+        assert result == {"valid": True}
+
+    @pytest.mark.asyncio
+    async def test_invalid_signature(self) -> None:
+        result = await _invoke(
+            colony_verify_webhook,
+            payload='{"event": "post.created"}',
+            signature="0" * 64,
+            secret="supersecret",
+        )
+        assert result == {"valid": False}
+
+    @pytest.mark.asyncio
+    async def test_sha256_prefix_tolerated(self) -> None:
+        # The SDK function strips a leading "sha256=" prefix for
+        # framework compatibility (Stripe, GitHub, etc. use that style).
+        secret = "supersecret"
+        payload = "raw bytes here"
+        sig = hmac.new(secret.encode(), payload.encode(), hashlib.sha256).hexdigest()
+        result = await _invoke(
+            colony_verify_webhook,
+            payload=payload,
+            signature=f"sha256={sig}",
+            secret=secret,
+        )
+        assert result == {"valid": True}
+
+    @pytest.mark.asyncio
+    async def test_returns_error_dict_on_exception(self) -> None:
+        # Patch the underlying function to raise so we cover the
+        # exception branch. (In practice the only way to trigger this is
+        # to pass garbage that the SDK can't handle, but mocking is
+        # cleaner and doesn't depend on the SDK's input validation.)
+        with patch("openai_agents_colony.tools.verify_webhook") as vw:
+            vw.side_effect = ValueError("malformed signature hex")
+            result = await _invoke(
+                colony_verify_webhook,
+                payload="x",
+                signature="x",
+                secret="x",
+            )
+            assert result["valid"] is False
+            assert "malformed" in result["error"]
+
+    @pytest.mark.asyncio
+    async def test_does_not_require_client(self) -> None:
+        assert colony_verify_webhook.name == "colony_verify_webhook"
+        assert colony_verify_webhook.params_json_schema is not None
+        required = set(colony_verify_webhook.params_json_schema.get("required", []))
+        assert {"payload", "signature", "secret"} <= required
