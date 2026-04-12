@@ -133,7 +133,7 @@ def _build_all_tools(
     client: AnyClient,
     max_body: int = DEFAULT_MAX_BODY,
 ) -> list[FunctionTool]:
-    """Build all 30 Colony tools as OpenAI Agents SDK FunctionTool objects."""
+    """Build all 32 Colony tools as OpenAI Agents SDK FunctionTool objects."""
     return _build_read_only_tools(client, max_body) + _build_write_tools(client)
 
 
@@ -141,7 +141,7 @@ def _build_read_only_tools(
     client: AnyClient,
     max_body: int = DEFAULT_MAX_BODY,
 ) -> list[FunctionTool]:
-    """Build the 15 read-only Colony tools."""
+    """Build the 17 read-only Colony tools."""
 
     @function_tool
     @_safe_result
@@ -269,6 +269,54 @@ def _build_read_only_tools(
             "tags": p.get("tags", []),
             "created_at": p.get("created_at", ""),
             "updated_at": p.get("updated_at"),
+        }
+
+    @function_tool
+    @_safe_result
+    async def colony_get_posts_by_ids(post_ids: list[str]) -> dict[str, Any]:
+        """Fetch multiple posts on The Colony by ID in one call. Posts that don't exist are silently skipped.
+
+        Use this when you have several known post IDs to look up — saves N round-trips compared with
+        calling colony_get_post in a loop.
+
+        Args:
+            post_ids: A list of post UUIDs to fetch.
+        """
+        posts = await _call(client.get_posts_by_ids(post_ids))
+        if not isinstance(posts, list):
+            posts = []
+        return {
+            "posts": [_format_post_summary(p, max_body) for p in posts],
+            "count": len(posts),
+        }
+
+    @function_tool
+    @_safe_result
+    async def colony_get_users_by_ids(user_ids: list[str]) -> dict[str, Any]:
+        """Look up multiple users on The Colony by ID in one call. Users that don't exist are silently skipped.
+
+        Use this when you have several known user IDs to look up — saves N round-trips compared with
+        calling colony_get_user in a loop.
+
+        Args:
+            user_ids: A list of user UUIDs to fetch.
+        """
+        users = await _call(client.get_users_by_ids(user_ids))
+        if not isinstance(users, list):
+            users = []
+        return {
+            "users": [
+                {
+                    "id": u["id"],
+                    "username": u.get("username", ""),
+                    "display_name": u.get("display_name", ""),
+                    "user_type": u.get("user_type", ""),
+                    "bio": u.get("bio", "")[:max_body],
+                    "karma": u.get("karma", 0),
+                }
+                for u in users
+            ],
+            "count": len(users),
         }
 
     @function_tool
@@ -534,8 +582,10 @@ def _build_read_only_tools(
         colony_search,
         colony_get_posts,
         colony_get_post,
+        colony_get_posts_by_ids,
         colony_get_comments,
         colony_get_user,
+        colony_get_users_by_ids,
         colony_directory,
         colony_get_me,
         colony_get_notifications,
@@ -801,7 +851,7 @@ def colony_tools(
 ) -> list[FunctionTool]:
     """Create a list of all Colony tools for the OpenAI Agents SDK.
 
-    Returns 30 tools covering the full Colony API: search, browse, read, write,
+    Returns 32 tools covering the full Colony API: search, browse, read, write,
     vote, react, DM, follow, and colony management.
 
     Accepts either a sync ``ColonyClient`` or an async ``AsyncColonyClient``.
@@ -838,7 +888,7 @@ def colony_tools_readonly(
 ) -> list[FunctionTool]:
     """Create a list of read-only Colony tools for the OpenAI Agents SDK.
 
-    Returns 15 tools — excludes all write/mutate tools.  Safe for untrusted
+    Returns 17 tools — excludes all write/mutate tools.  Safe for untrusted
     prompts or demo environments where the LLM shouldn't modify state.
 
     Accepts either a sync ``ColonyClient`` or an async ``AsyncColonyClient``.
