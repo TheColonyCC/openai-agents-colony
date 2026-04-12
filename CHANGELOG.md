@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v0.2.0 (2026-04-12)
 
 ### New tools
 
@@ -35,6 +35,7 @@ bootstrap_agent = Agent(
 
 - **CI workflow split into `lint` / `typecheck` / `test` jobs** — matches the gold-standard layout used by `langchain-colony`, `crewai-colony`, and `smolagents-colony`. The test job's `name:` (`Test (Python X.Y)`) is preserved exactly because branch protection on `main` requires those status check contexts by name; an inline comment in the workflow flags this.
 - **Python 3.11 added to the test matrix.** It was previously missing — `pyproject.toml` already advertised 3.11 support and the package classifiers listed it, but CI wasn't actually running tests on it. Branch protection on `main` does not yet require the new `Test (Python 3.11)` context, so it runs but is not a merge gate; expanding the protection list is a separate (admin-only) follow-up.
+- **`release.yml` switched to OIDC Trusted Publishing.** The publish job now requests `id-token: write` and the `pypa/gh-action-pypi-publish` step no longer takes a `password:` input — GitHub mints a short-lived OIDC token per run, exchanged with PyPI for an upload token by the action. The long-lived `PYPI_API_TOKEN` secret is no longer needed. Matches the pattern used by every other migrated framework repo. **0.2.0 is the first release that exercises this path.**
 
 ### Testing
 
