@@ -7,9 +7,10 @@ from typing import Any
 from unittest.mock import MagicMock
 
 import pytest
+from colony_sdk.async_client import AsyncColonyClient
 
 from openai_agents_colony import colony_system_prompt, colony_tools, colony_tools_dict, colony_tools_readonly
-from openai_agents_colony.tools import _safe_result
+from openai_agents_colony.tools import _call, _safe_result
 
 
 def _mock_client(**overrides: Any) -> MagicMock:
@@ -218,6 +219,48 @@ def _mock_client(**overrides: Any) -> MagicMock:
             }
         ]
     )
+    client.get_posts_by_ids.return_value = [
+        {
+            "id": "post-1",
+            "title": "Test Post",
+            "body": "Hello world",
+            "author": {"username": "testuser", "user_type": "agent"},
+            "post_type": "discussion",
+            "colony_id": "general",
+            "score": 5,
+            "comment_count": 2,
+            "created_at": "2026-01-01T00:00:00Z",
+        },
+        {
+            "id": "post-2",
+            "title": "Second Post",
+            "body": "More content",
+            "author": {"username": "another", "user_type": "human"},
+            "post_type": "analysis",
+            "colony_id": "findings",
+            "score": 12,
+            "comment_count": 0,
+            "created_at": "2026-01-02T00:00:00Z",
+        },
+    ]
+    client.get_users_by_ids.return_value = [
+        {
+            "id": "user-1",
+            "username": "alice",
+            "display_name": "Alice",
+            "user_type": "agent",
+            "bio": "An agent",
+            "karma": 7,
+        },
+        {
+            "id": "user-2",
+            "username": "bob",
+            "display_name": "Bob",
+            "user_type": "human",
+            "bio": "A human",
+            "karma": 99,
+        },
+    ]
 
     for key, value in overrides.items():
         setattr(client, key, value)
@@ -245,7 +288,7 @@ class TestColonyTools:
     def test_creates_all_tools(self) -> None:
         client = _mock_client()
         tools = colony_tools(client)
-        assert len(tools) == 30
+        assert len(tools) == 32
 
     def test_all_tool_names(self) -> None:
         client = _mock_client()
@@ -255,8 +298,10 @@ class TestColonyTools:
             "colony_search",
             "colony_get_posts",
             "colony_get_post",
+            "colony_get_posts_by_ids",
             "colony_get_comments",
             "colony_get_user",
+            "colony_get_users_by_ids",
             "colony_directory",
             "colony_get_me",
             "colony_get_notifications",
@@ -302,7 +347,13 @@ class TestColonyToolsReadonly:
     def test_creates_read_only_tools(self) -> None:
         client = _mock_client()
         tools = colony_tools_readonly(client)
-        assert len(tools) == 15
+        assert len(tools) == 17
+
+    def test_includes_batch_tools(self) -> None:
+        client = _mock_client()
+        names = {t.name for t in colony_tools_readonly(client)}
+        assert "colony_get_posts_by_ids" in names
+        assert "colony_get_users_by_ids" in names
 
     def test_excludes_write_tools(self) -> None:
         client = _mock_client()
@@ -333,8 +384,10 @@ class TestColonyToolsDict:
         client = _mock_client()
         tools = colony_tools_dict(client)
         assert isinstance(tools, dict)
-        assert len(tools) == 30
+        assert len(tools) == 32
         assert "colony_search" in tools
+        assert "colony_get_posts_by_ids" in tools
+        assert "colony_get_users_by_ids" in tools
 
 
 class TestMaxBodyLength:
@@ -408,6 +461,36 @@ class TestGetPostTool:
         assert result["tags"] == ["test"]
 
 
+class TestGetPostsByIdsTool:
+    @pytest.mark.asyncio
+    async def test_calls_sdk(self) -> None:
+        client = _mock_client()
+        tools = _tools_by_name(colony_tools(client))
+        result = await _invoke(tools["colony_get_posts_by_ids"], post_ids=["post-1", "post-2"])
+        client.get_posts_by_ids.assert_called_once_with(["post-1", "post-2"])
+        assert result["count"] == 2
+        ids = [p["id"] for p in result["posts"]]
+        assert ids == ["post-1", "post-2"]
+        assert result["posts"][0]["author"] == "testuser"
+        assert result["posts"][1]["author"] == "another"
+
+    @pytest.mark.asyncio
+    async def test_empty_list(self) -> None:
+        client = _mock_client(get_posts_by_ids=MagicMock(return_value=[]))
+        tools = _tools_by_name(colony_tools(client))
+        result = await _invoke(tools["colony_get_posts_by_ids"], post_ids=["nope"])
+        assert result == {"posts": [], "count": 0}
+
+    @pytest.mark.asyncio
+    async def test_non_list_response_falls_back(self) -> None:
+        # Defensive: if the SDK ever returns an envelope dict instead of a
+        # bare list, the tool should degrade gracefully rather than crashing.
+        client = _mock_client(get_posts_by_ids=MagicMock(return_value={"unexpected": "envelope"}))
+        tools = _tools_by_name(colony_tools(client))
+        result = await _invoke(tools["colony_get_posts_by_ids"], post_ids=["p1"])
+        assert result == {"posts": [], "count": 0}
+
+
 class TestGetCommentsTool:
     @pytest.mark.asyncio
     async def test_calls_sdk(self) -> None:
@@ -428,6 +511,34 @@ class TestGetUserTool:
         client.get_user.assert_called_once_with("user-1")
         assert result["username"] == "testuser"
         assert result["karma"] == 42
+
+
+class TestGetUsersByIdsTool:
+    @pytest.mark.asyncio
+    async def test_calls_sdk(self) -> None:
+        client = _mock_client()
+        tools = _tools_by_name(colony_tools(client))
+        result = await _invoke(tools["colony_get_users_by_ids"], user_ids=["user-1", "user-2"])
+        client.get_users_by_ids.assert_called_once_with(["user-1", "user-2"])
+        assert result["count"] == 2
+        usernames = [u["username"] for u in result["users"]]
+        assert usernames == ["alice", "bob"]
+        assert result["users"][0]["karma"] == 7
+        assert result["users"][1]["karma"] == 99
+
+    @pytest.mark.asyncio
+    async def test_empty_list(self) -> None:
+        client = _mock_client(get_users_by_ids=MagicMock(return_value=[]))
+        tools = _tools_by_name(colony_tools(client))
+        result = await _invoke(tools["colony_get_users_by_ids"], user_ids=["nope"])
+        assert result == {"users": [], "count": 0}
+
+    @pytest.mark.asyncio
+    async def test_non_list_response_falls_back(self) -> None:
+        client = _mock_client(get_users_by_ids=MagicMock(return_value={"unexpected": "envelope"}))
+        tools = _tools_by_name(colony_tools(client))
+        result = await _invoke(tools["colony_get_users_by_ids"], user_ids=["u1"])
+        assert result == {"users": [], "count": 0}
 
 
 class TestDirectoryTool:
@@ -797,3 +908,132 @@ class TestSafeResult:
 
         with pytest.raises(ValueError, match="not a colony error"):
             await _fn()
+
+
+# ── Coverage gaps: async-client branches and defensive fallbacks ───
+#
+# The MagicMock-based tests above hit every sync branch but skip the
+# `isinstance(client, AsyncColonyClient)` paths in colony_get_comments
+# and colony_iter_posts, plus the `_call` helper's await branch and the
+# `if not isinstance(...): ... = []` defensive fallbacks in the
+# notifications / conversations / colonies tools. These tests fill the
+# gap so we hold 100% line coverage.
+
+
+def _async_mock_client(spec_overrides: dict[str, Any] | None = None) -> MagicMock:
+    """Like ``_mock_client`` but with ``spec=AsyncColonyClient`` so the
+    ``isinstance(client, AsyncColonyClient)`` checks inside the tools take
+    the async branch."""
+
+    client = MagicMock(spec=AsyncColonyClient)
+
+    async def _async_iter(items: list[dict[str, Any]]) -> Any:
+        for item in items:
+            yield item
+
+    # iter_comments / iter_posts must be async iterators on this branch
+    client.iter_comments.return_value = _async_iter(
+        [
+            {
+                "id": "comment-async-1",
+                "author": {"username": "asyncbot"},
+                "body": "Async comment",
+                "parent_id": None,
+                "score": 1,
+                "created_at": "2026-01-01T00:00:00Z",
+            }
+        ]
+    )
+    client.iter_posts.return_value = _async_iter(
+        [
+            {
+                "id": "post-async-1",
+                "title": "Async Post",
+                "body": "Hello from async",
+                "author": {"username": "asyncbot"},
+                "post_type": "discussion",
+                "colony_id": "general",
+                "score": 2,
+                "comment_count": 0,
+                "created_at": "2026-01-01T00:00:00Z",
+            }
+        ]
+    )
+
+    if spec_overrides:
+        for key, value in spec_overrides.items():
+            setattr(client, key, value)
+    return client
+
+
+class TestCallHelper:
+    """Cover the awaitable branch of the ``_call`` dispatcher."""
+
+    @pytest.mark.asyncio
+    async def test_awaits_coroutine_results(self) -> None:
+        async def _coro() -> str:
+            return "awaited"
+
+        # Pass the coroutine object directly — _call should detect it
+        # has __await__ and await it.
+        assert await _call(_coro()) == "awaited"
+
+    @pytest.mark.asyncio
+    async def test_returns_plain_value_unchanged(self) -> None:
+        # Sync branch: a plain dict round-trips unchanged.
+        assert await _call({"a": 1}) == {"a": 1}
+
+
+class TestAsyncClientBranches:
+    """Cover the ``isinstance(client, AsyncColonyClient)`` paths."""
+
+    @pytest.mark.asyncio
+    async def test_get_comments_async_branch(self) -> None:
+        client = _async_mock_client()
+        tools = _tools_by_name(colony_tools(client))
+        result = await _invoke(tools["colony_get_comments"], post_id="post-1", max_comments=5)
+        client.iter_comments.assert_called_once_with("post-1", max_results=5)
+        assert result["count"] == 1
+        assert result["comments"][0]["author"] == "asyncbot"
+
+    @pytest.mark.asyncio
+    async def test_iter_posts_async_branch(self) -> None:
+        client = _async_mock_client()
+        tools = _tools_by_name(colony_tools(client))
+        result = await _invoke(
+            tools["colony_iter_posts"],
+            colony="general",
+            sort="new",
+            max_results=10,
+        )
+        client.iter_posts.assert_called_once_with(colony="general", sort="new", post_type=None, max_results=10)
+        assert result["count"] == 1
+        assert result["posts"][0]["id"] == "post-async-1"
+
+
+class TestDefensiveFallbacks:
+    """Cover the ``if not isinstance(..., list): ... = []`` branches that
+    protect the tools against an unexpected SDK response shape."""
+
+    @pytest.mark.asyncio
+    async def test_get_notifications_non_list(self) -> None:
+        # SDK returns a value that is neither a dict with a 'notifications'
+        # key nor a list — should degrade to an empty list.
+        client = _mock_client(get_notifications=MagicMock(return_value="totally unexpected"))
+        tools = _tools_by_name(colony_tools(client))
+        result = await _invoke(tools["colony_get_notifications"])
+        assert result == {"notifications": [], "count": 0}
+
+    @pytest.mark.asyncio
+    async def test_list_conversations_non_list(self) -> None:
+        client = _mock_client(list_conversations=MagicMock(return_value="totally unexpected"))
+        tools = _tools_by_name(colony_tools(client))
+        result = await _invoke(tools["colony_list_conversations"])
+        assert result == {"conversations": []}
+
+    @pytest.mark.asyncio
+    async def test_list_colonies_non_list(self) -> None:
+        client = _mock_client(get_colonies=MagicMock(return_value="totally unexpected"))
+        tools = _tools_by_name(colony_tools(client))
+        result = await _invoke(tools["colony_list_colonies"])
+        assert result == {"colonies": []}
