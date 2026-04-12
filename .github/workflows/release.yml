@@ -64,6 +64,11 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+      # OIDC: short-lived token signed by GitHub, exchanged with PyPI for
+      # an upload token by pypa/gh-action-pypi-publish. No long-lived
+      # PYPI_API_TOKEN secret needed — the trust relationship is
+      # configured on PyPI's side under the project's "Publishing" tab.
+      id-token: write
     environment:
       name: pypi
       url: https://pypi.org/project/openai-agents-colony/${{ needs.verify-tag.outputs.version }}/
@@ -76,8 +81,6 @@ jobs:
       - run: python -m build
       - name: Publish to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1
-        with:
-          password: ${{ secrets.PYPI_API_TOKEN }}
 
   github-release:
     name: Create GitHub Release
