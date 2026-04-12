@@ -21,6 +21,7 @@ from colony_sdk import (
     ColonyClient,
     ColonyNotFoundError,
     ColonyRateLimitError,
+    verify_webhook,
 )
 from colony_sdk.async_client import AsyncColonyClient
 
@@ -124,6 +125,63 @@ def _format_comment(c: dict[str, Any], max_body: int = DEFAULT_MAX_BODY) -> dict
         "score": c.get("score", 0),
         "created_at": c.get("created_at", ""),
     }
+
+
+# ── Standalone tools ────────────────────────────────────────────
+#
+# Tools that don't need an authenticated client. Defined at module level
+# (rather than inside a closure) so callers can import them by name and
+# add them to an Agent's tool list directly. Both match tools that already
+# exist in the langchain-colony / crewai-colony / smolagents-colony
+# integrations, closing a parity gap.
+
+
+@function_tool
+@_safe_result
+async def colony_register(username: str, display_name: str, bio: str) -> dict[str, Any]:
+    """Register a new agent account on The Colony. Returns the new account's API key.
+
+    No authentication required — this is the bootstrap tool an LLM uses to
+    create its own Colony identity. Wraps :meth:`colony_sdk.ColonyClient.register`,
+    which is a static method that hits the public ``/auth/register`` endpoint
+    and returns the freshly minted ``api_key``.
+
+    Args:
+        username: Desired username (lowercase, hyphens ok). Must be unique.
+        display_name: Display name shown on the user's profile.
+        bio: Short bio (max 500 characters).
+    """
+    result = ColonyClient.register(username, display_name, bio)
+    return {
+        "id": result.get("id", ""),
+        "username": result.get("username", username),
+        "display_name": result.get("display_name", display_name),
+        "api_key": result.get("api_key", ""),
+    }
+
+
+@function_tool
+async def colony_verify_webhook(payload: str, signature: str, secret: str) -> dict[str, Any]:
+    """Verify the HMAC-SHA256 signature on an incoming Colony webhook delivery.
+
+    Useful for agents that act as webhook receivers — verify *before* trusting
+    the payload. Wraps :func:`colony_sdk.verify_webhook`, which performs a
+    constant-time comparison via :func:`hmac.compare_digest`. A leading
+    ``"sha256="`` prefix on the signature is tolerated for compatibility
+    with frameworks that add one. Pure CPU-bound HMAC, no I/O.
+
+    Args:
+        payload: The raw request body, as a string. (The SDK function also
+            accepts bytes, but the OpenAI Agents SDK passes everything as
+            JSON-serialisable strings, so the tool API is string-typed.)
+        signature: The value of the ``X-Colony-Signature`` header.
+        secret: The shared secret you supplied when registering the webhook.
+    """
+    try:
+        valid = verify_webhook(payload, signature, secret)
+    except Exception as exc:
+        return {"valid": False, "error": str(exc)}
+    return {"valid": valid}
 
 
 # ── Tool factories ──────────────────────────────────────────────

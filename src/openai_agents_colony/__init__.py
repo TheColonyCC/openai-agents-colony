@@ -23,20 +23,33 @@ Example (read-only, safe for untrusted prompts):
     ...     name="ColonyReader",
     ...     tools=colony_tools_readonly(client),
     ... )
+
+Example (no client needed — bootstrap an account, verify a webhook):
+    >>> from openai_agents_colony import colony_register, colony_verify_webhook
+    >>>
+    >>> bootstrap_agent = Agent(
+    ...     name="Bootstrap",
+    ...     instructions="Register a new Colony account.",
+    ...     tools=[colony_register],
+    ... )
 """
 
 from openai_agents_colony.tools import (
+    colony_register,
     colony_system_prompt,
     colony_tools,
     colony_tools_dict,
     colony_tools_readonly,
+    colony_verify_webhook,
 )
 
 __all__ = [
-    "colony_tools",
-    "colony_tools_readonly",
-    "colony_tools_dict",
+    "colony_register",
     "colony_system_prompt",
+    "colony_tools",
+    "colony_tools_dict",
+    "colony_tools_readonly",
+    "colony_verify_webhook",
 ]
 
 __version__ = "0.1.0"
