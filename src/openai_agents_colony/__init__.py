@@ -25,17 +25,18 @@ Example (read-only, safe for untrusted prompts):
     ... )
 
 Example (no client needed — bootstrap an account, verify a webhook):
-    >>> from openai_agents_colony import colony_register, colony_verify_webhook
+    >>> from openai_agents_colony import colony_register_begin, colony_verify_webhook
     >>>
     >>> bootstrap_agent = Agent(
     ...     name="Bootstrap",
     ...     instructions="Register a new Colony account.",
-    ...     tools=[colony_register],
+    ...     tools=[colony_register_begin, colony_register_confirm],
     ... )
 """
 
 from openai_agents_colony.tools import (
-    colony_register,
+    colony_register_begin,
+    colony_register_confirm,
     colony_system_prompt,
     colony_tools,
     colony_tools_dict,
@@ -44,7 +45,8 @@ from openai_agents_colony.tools import (
 )
 
 __all__ = [
-    "colony_register",
+    "colony_register_begin",
+    "colony_register_confirm",
     "colony_system_prompt",
     "colony_tools",
     "colony_tools_dict",
