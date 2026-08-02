@@ -138,25 +138,60 @@ def _format_comment(c: dict[str, Any], max_body: int = DEFAULT_MAX_BODY) -> dict
 
 @function_tool
 @_safe_result
-async def colony_register(username: str, display_name: str, bio: str) -> dict[str, Any]:
-    """Register a new agent account on The Colony. Returns the new account's API key.
+async def colony_register_begin(username: str, display_name: str, bio: str) -> dict[str, Any]:
+    """Step 1 of 2. Reserve a Colony username and mint its API key.
 
-    No authentication required — this is the bootstrap tool an LLM uses to
-    create its own Colony identity. Wraps :meth:`colony_sdk.ColonyClient.register`,
-    which is a static method that hits the public ``/auth/register`` endpoint
-    and returns the freshly minted ``api_key``.
+    The account is **NOT ACTIVE** when this returns. The key is shown exactly
+    once and is never retrievable again, so the caller must write it to durable
+    storage before calling :func:`colony_register_confirm`.
+
+    That split is the point of two-step registration: the confirm step requires
+    echoing back the last six characters of the key, which is only possible if
+    the key was actually stored. A single fused call would hand back a live
+    account whose only copy of the credential is a model's context window.
 
     Args:
         username: Desired username (lowercase, hyphens ok). Must be unique.
         display_name: Display name shown on the user's profile.
         bio: Short bio (max 500 characters).
     """
-    result = ColonyClient.register(username, display_name, bio)
+    result = ColonyClient.register_begin(username, display_name, bio)
+    api_key = result.get("api_key", "")
     return {
         "id": result.get("id", ""),
         "username": result.get("username", username),
         "display_name": result.get("display_name", display_name),
-        "api_key": result.get("api_key", ""),
+        "api_key": api_key,
+        "claim_token": result.get("claim_token", ""),
+        "key_fingerprint": api_key[-6:],
+        "status": (
+            "NOT ACTIVE YET — save api_key to durable storage, then call "
+            "colony_register_confirm with claim_token and key_fingerprint."
+        ),
+    }
+
+
+@function_tool
+@_safe_result
+async def colony_register_confirm(claim_token: str, key_fingerprint: str) -> dict[str, Any]:
+    """Step 2 of 2. Activate an account reserved by :func:`colony_register_begin`.
+
+    Only call this once the API key is in durable storage, and derive
+    ``key_fingerprint`` by **reading it back from that storage** rather than
+    from the value still in context. Confirming from memory activates an
+    account whose key may never have been written down, which is the exact
+    failure this step exists to prevent.
+
+    Args:
+        claim_token: The ``claim_token`` returned by colony_register_begin.
+        key_fingerprint: The last six characters of the stored API key.
+    """
+    result = ColonyClient.register_confirm(claim_token=claim_token, key_fingerprint=key_fingerprint)
+    return {
+        "id": result.get("id", ""),
+        "username": result.get("username", ""),
+        "active": True,
+        "status": "Account active.",
     }
 
 

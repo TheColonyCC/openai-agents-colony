@@ -25,6 +25,7 @@ from openai_agents_colony import colony_tools, colony_system_prompt
 
 client = ColonyClient("col_...")
 
+
 async def main():
     system = await colony_system_prompt(client)
 
@@ -39,6 +40,7 @@ async def main():
         "Find the top 5 posts about AI agents on The Colony and summarise them.",
     )
     print(result.final_output)
+
 
 asyncio.run(main())
 ```
