@@ -12,7 +12,8 @@ import pytest
 from colony_sdk.async_client import AsyncColonyClient
 
 from openai_agents_colony import (
-    colony_register,
+    colony_register_begin,
+    colony_register_confirm,
     colony_system_prompt,
     colony_tools,
     colony_tools_dict,
@@ -1051,57 +1052,97 @@ class TestDefensiveFallbacks:
 # ── Standalone tools (no client required) ──────────────────────────
 
 
-class TestColonyRegisterTool:
+class TestColonyRegisterTools:
+    """Two tools, and the split is the point.
+
+    A single fused register returns a live account whose only copy of the
+    once-shown key is a model's context. These pin begin and confirm apart.
+    """
+
     @pytest.mark.asyncio
-    async def test_returns_api_key_on_success(self) -> None:
-        # ColonyClient.register is a static method on the SDK class.
-        # Patch it for the duration of the test.
-        with patch("openai_agents_colony.tools.ColonyClient.register") as register:
-            register.return_value = {
+    async def test_begin_reserves_and_says_it_is_not_active(self) -> None:
+        with patch("openai_agents_colony.tools.ColonyClient.register_begin") as begin:
+            begin.return_value = {
                 "id": "user-new-1",
                 "username": "newagent",
                 "display_name": "New Agent",
                 "api_key": "col_freshly_minted_key",
+                "claim_token": "claim-xyz",
             }
             result = await _invoke(
-                colony_register,
+                colony_register_begin,
                 username="newagent",
                 display_name="New Agent",
                 bio="A brand-new agent",
             )
-            register.assert_called_once_with("newagent", "New Agent", "A brand-new agent")
+            begin.assert_called_once_with("newagent", "New Agent", "A brand-new agent")
             assert result["api_key"] == "col_freshly_minted_key"
-            assert result["username"] == "newagent"
-            assert result["id"] == "user-new-1"
+            assert result["claim_token"] == "claim-xyz"
+            # last six characters, derived for the caller
+            assert result["key_fingerprint"] == "ed_key"
+            # The caller must be told the job is half done, or it stops here.
+            assert "NOT ACTIVE YET" in result["status"]
 
     @pytest.mark.asyncio
-    async def test_handles_username_taken_error(self) -> None:
+    async def test_confirm_activates(self) -> None:
+        with patch("openai_agents_colony.tools.ColonyClient.register_confirm") as confirm:
+            confirm.return_value = {"id": "user-new-1", "username": "newagent"}
+            result = await _invoke(
+                colony_register_confirm,
+                claim_token="claim-xyz",
+                key_fingerprint="ed_key",
+            )
+            confirm.assert_called_once_with(claim_token="claim-xyz", key_fingerprint="ed_key")
+            assert result["active"] is True
+            assert result["username"] == "newagent"
+
+    @pytest.mark.asyncio
+    async def test_begin_handles_username_taken_error(self) -> None:
         from colony_sdk import ColonyAPIError
 
-        with patch("openai_agents_colony.tools.ColonyClient.register") as register:
-            register.side_effect = ColonyAPIError("Username already taken", 409, {})
+        with patch("openai_agents_colony.tools.ColonyClient.register_begin") as begin:
+            begin.side_effect = ColonyAPIError("Username already taken", 409, {})
             result = await _invoke(
-                colony_register,
+                colony_register_begin,
                 username="taken",
                 display_name="Taken",
                 bio="...",
             )
-            # _safe_result wraps API errors as a structured error dict
-            # rather than raising — the LLM gets a clear failure signal
-            # without crashing the run.
+            # _safe_result wraps API errors as a structured error dict rather
+            # than raising — the LLM gets a clear failure signal.
             assert result["code"] == "HTTP_409"
             assert "already taken" in result["error"]
 
     @pytest.mark.asyncio
-    async def test_does_not_require_client(self) -> None:
-        # The whole point of this tool: it's importable and usable without
-        # an authenticated ColonyClient. Just verify the FunctionTool exists
-        # and exposes the expected name/schema.
-        assert colony_register.name == "colony_register"
-        assert colony_register.params_json_schema is not None
-        # Required params should be username/display_name/bio
-        required = set(colony_register.params_json_schema.get("required", []))
-        assert {"username", "display_name", "bio"} <= required
+    async def test_confirm_handles_bad_fingerprint(self) -> None:
+        from colony_sdk import ColonyAPIError
+
+        with patch("openai_agents_colony.tools.ColonyClient.register_confirm") as confirm:
+            confirm.side_effect = ColonyAPIError("fingerprint mismatch", 400, {})
+            result = await _invoke(
+                colony_register_confirm,
+                claim_token="claim-xyz",
+                key_fingerprint="wrong1",
+            )
+            assert result["code"] == "HTTP_400"
+            assert "fingerprint mismatch" in result["error"]
+
+    @pytest.mark.asyncio
+    async def test_there_is_no_fused_register_tool(self) -> None:
+        # A fused register defeats two-step registration; assert it is gone
+        # rather than trusting that nobody re-adds it.
+        import openai_agents_colony as pkg
+
+        assert not hasattr(pkg, "colony_register"), "a fused colony_register tool defeats two-step registration"
+
+    @pytest.mark.asyncio
+    async def test_tools_do_not_require_client(self) -> None:
+        assert colony_register_begin.name == "colony_register_begin"
+        assert colony_register_confirm.name == "colony_register_confirm"
+        req = set(colony_register_begin.params_json_schema.get("required", []))
+        assert {"username", "display_name", "bio"} <= req
+        req2 = set(colony_register_confirm.params_json_schema.get("required", []))
+        assert {"claim_token", "key_fingerprint"} <= req2
 
 
 class TestColonyVerifyWebhookTool:
