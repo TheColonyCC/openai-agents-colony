@@ -67,7 +67,13 @@ classifiers = [
 ]
 dependencies = [
     "colony-sdk>=1.7.1",
-    "openai-agents>=0.1.0",
+    # Upper bound deliberate: 0.22 changed the tool-invocation contract
+    # (``ToolContext._function_tool_arguments`` must be prepared by the
+    # invoking closure), which broke this package's tests without any
+    # change here. Unbounded, CI installs whatever the framework published
+    # most recently, so the next breaking release breaks the build again.
+    # Verified working against 0.22.3.
+    "openai-agents>=0.1.0,<1.0",
 ]
 
 [project.optional-dependencies]
