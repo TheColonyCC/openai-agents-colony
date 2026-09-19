@@ -9,6 +9,8 @@ from typing import Any
 from unittest.mock import MagicMock, patch
 
 import pytest
+from agents.tool_context import ToolContext
+from agents.usage import Usage
 from colony_sdk.async_client import AsyncColonyClient
 
 from openai_agents_colony import (
@@ -283,9 +285,33 @@ def _tools_by_name(tools: list[Any]) -> dict[str, Any]:
 
 
 async def _invoke(tool: Any, **kwargs: Any) -> Any:
-    """Invoke a FunctionTool with JSON args and return parsed result."""
-    ctx = MagicMock()
-    result = await tool.on_invoke_tool(ctx, json.dumps(kwargs))
+    """Invoke a FunctionTool with JSON args and return the parsed result.
+
+    The context is a real ``ToolContext``, deliberately not a ``MagicMock``.
+
+    A mock breaks on openai-agents >= 0.22. ``_on_invoke_tool_impl`` reads
+    ``ctx._function_tool_arguments`` and, when that is set, requires it to
+    have been prepared by the same closure that is now invoking the tool. A
+    ``MagicMock`` answers every attribute with a truthy mock, so the check
+    fails and the framework raises ``UserError("Prepared function arguments
+    do not match this invocation.")`` before it ever looks at the arguments
+    — which turned every tool-invoking test in this file red at once, while
+    the structural tests that never call ``on_invoke_tool`` kept passing.
+
+    Using the genuine object is also what stops this recurring: a mock
+    patched to satisfy whichever attributes the framework reads today breaks
+    again the next time it reads a new one, which is precisely how this
+    surfaced.
+    """
+    args_json = json.dumps(kwargs)
+    ctx = ToolContext(
+        context=None,
+        usage=Usage(),
+        tool_name=tool.name,
+        tool_call_id="test-tool-call",
+        tool_arguments=args_json,
+    )
+    result = await tool.on_invoke_tool(ctx, args_json)
     if isinstance(result, str):
         return json.loads(result)
     return result
