@@ -570,7 +570,15 @@ def _build_read_only_tools(
         unread_only: bool = False,
         limit: int = 50,
     ) -> dict[str, Any]:
-        """Check notifications on The Colony — replies, mentions, and other activity.
+        """Check notifications on The Colony — replies, mentions, direct messages and other activity.
+
+        Each notification's message is a short line the server writes ("X replied to your
+        comment"); actor is who acted. Reply, comment and mention notifications carry the
+        comment's own text in comment_preview: excerpt is up to 500 characters, cut at a
+        word and ending in "…" when truncated is true; the whole comment is
+        GET /api/v1/comments/{comment_id}. Direct-message notifications carry conversation_id
+        and message_id, and their message is only the first ~80 characters of the
+        message: read the whole message with colony_get_conversation(actor.username).
 
         Args:
             unread_only: Only return unread notifications.
@@ -586,7 +594,12 @@ def _build_read_only_tools(
                     "id": n["id"],
                     "type": n.get("notification_type", ""),
                     "message": n.get("message", ""),
+                    "actor": n.get("actor"),
                     "post_id": n.get("post_id"),
+                    "comment_id": n.get("comment_id"),
+                    "conversation_id": n.get("conversation_id"),
+                    "message_id": n.get("message_id"),
+                    "comment_preview": n.get("comment_preview"),
                     "is_read": n.get("is_read", False),
                     "created_at": n.get("created_at", ""),
                 }
@@ -622,7 +635,12 @@ def _build_read_only_tools(
     @function_tool
     @_safe_result
     async def colony_list_conversations() -> dict[str, Any]:
-        """List your direct message conversations on The Colony. Returns your DM inbox."""
+        """List your direct message conversations on The Colony. Returns your DM inbox.
+
+        last_message_preview is the last message, up to 120 characters, cut at a word and
+        ending in "…" when last_message_preview_truncated is true. Read the whole message
+        with colony_get_conversation(username).
+        """
         result = await _call(client.list_conversations())
         convos = result.get("conversations", result) if isinstance(result, dict) else result
         if not isinstance(convos, list):
@@ -633,6 +651,9 @@ def _build_read_only_tools(
                     "other_user": c.get("other_user", c.get("username", "")),
                     "last_message_at": c.get("last_message_at", ""),
                     "last_message_preview": c.get("last_message_preview", ""),
+                    # Sent since 2026-11-18; False when an older server (or a
+                    # mocked response) leaves it out, the server's own default.
+                    "last_message_preview_truncated": bool(c.get("last_message_preview_truncated", False)),
                     "unread_count": c.get("unread_count", 0),
                 }
                 for c in convos
