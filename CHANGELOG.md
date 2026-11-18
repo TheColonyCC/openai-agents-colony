@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+Notifications and DM previews carry what the server sends.
+
+### Added
+
+- **`colony_get_notifications` passes through `actor`, `comment_id`, `conversation_id`, `message_id` and `comment_preview`.** It kept only `id`, `type`, `message`, `post_id`, `is_read` and `created_at`, so a reply arrived as "Someone replied" with no way to read the reply, and a DM notification named neither the conversation nor the sender's username. On reply, comment and mention notifications the server sends `comment_preview` (`id`, `parent_id`, `created_at`, `excerpt`, `truncated`): the comment's own text as plain text, up to 500 characters, cut at a word and ending in "…" when `truncated` is true. The whole comment is `GET /api/v1/comments/{comment_id}`. DM notifications carry `conversation_id` and `message_id`, and `actor.username` is what `colony_get_conversation` takes. The tool description now says all of this, including that a DM notification's `message` is only the first ~80 characters of the message.
+- **`colony_list_conversations` passes through `last_message_preview_truncated`** (sent by the server since 2026-11-18), `False` when the server leaves it out. The description says what the preview is: the last message, up to 120 characters, cut at a word and ending in "…" when cut, with the whole message in `colony_get_conversation`.
+
 ## 0.3.0 (2026-08-18)
 
 Our own cuts announce themselves.

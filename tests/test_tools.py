@@ -609,6 +609,86 @@ class TestGetNotificationsTool:
         assert result["count"] == 1
         assert result["notifications"][0]["type"] == "reply"
 
+    @pytest.mark.asyncio
+    async def test_passes_through_the_comment_preview(self) -> None:
+        """A reply carries the comment's own text, so the agent need not find
+        it in the thread (server since 2026-11-02, cut at a word since
+        2026-11-18)."""
+        preview = {
+            "id": "comment-2",
+            "parent_id": "comment-1",
+            "created_at": "2026-11-18T17:00:00Z",
+            "excerpt": "I disagree with the second point, because…",
+            "truncated": True,
+        }
+        client = _mock_client()
+        client.get_notifications.return_value = [
+            {
+                "id": "notif-2",
+                "notification_type": "reply",
+                "message": "Someone replied to your comment",
+                "actor": {"id": "u-2", "username": "someone", "display_name": "Someone", "user_type": "agent"},
+                "post_id": "post-1",
+                "comment_id": "comment-2",
+                "conversation_id": None,
+                "message_id": None,
+                "comment_preview": preview,
+                "is_read": False,
+                "created_at": "2026-11-18T17:00:00Z",
+            }
+        ]
+        tools = _tools_by_name(colony_tools(client))
+        result = await _invoke(tools["colony_get_notifications"])
+        n = result["notifications"][0]
+        assert n["comment_id"] == "comment-2"
+        assert n["comment_preview"] == preview
+        assert n["actor"]["username"] == "someone"
+
+    @pytest.mark.asyncio
+    async def test_dm_notification_carries_conversation_and_message_ids(self) -> None:
+        client = _mock_client()
+        client.get_notifications.return_value = [
+            {
+                "id": "notif-3",
+                "notification_type": "direct_message",
+                "message": "Other User: hello, I wanted to ask about...",
+                "actor": {"id": "u-3", "username": "otheruser", "display_name": "Other User", "user_type": "agent"},
+                "post_id": None,
+                "comment_id": None,
+                "conversation_id": "conv-1",
+                "message_id": "msg-1",
+                "comment_preview": None,
+                "is_read": False,
+                "created_at": "2026-11-18T17:00:00Z",
+            }
+        ]
+        tools = _tools_by_name(colony_tools(client))
+        result = await _invoke(tools["colony_get_notifications"])
+        n = result["notifications"][0]
+        assert n["conversation_id"] == "conv-1"
+        assert n["message_id"] == "msg-1"
+        assert n["comment_preview"] is None
+        # The username colony_get_conversation needs to read the whole message.
+        assert n["actor"]["username"] == "otheruser"
+
+    @pytest.mark.asyncio
+    async def test_new_fields_are_none_when_the_server_omits_them(self) -> None:
+        client = _mock_client()
+        tools = _tools_by_name(colony_tools(client))
+        result = await _invoke(tools["colony_get_notifications"])
+        n = result["notifications"][0]
+        for key in ("actor", "comment_id", "conversation_id", "message_id", "comment_preview"):
+            assert n[key] is None
+
+    def test_description_says_where_the_whole_text_is(self) -> None:
+        tools = _tools_by_name(colony_tools(_mock_client()))
+        description = tools["colony_get_notifications"].description
+        assert "comment_preview" in description
+        assert "500 characters" in description
+        assert "GET /api/v1/comments/{comment_id}" in description
+        assert "first ~80 characters" in description
+        assert "colony_get_conversation" in description
+
 
 class TestGetNotificationCountTool:
     @pytest.mark.asyncio
@@ -640,6 +720,37 @@ class TestListConversationsTool:
         client.list_conversations.assert_called_once()
         assert result["conversations"][0]["other_user"] == "otheruser"
         assert result["conversations"][0]["unread_count"] == 1
+
+    @pytest.mark.asyncio
+    async def test_passes_through_preview_truncated(self) -> None:
+        client = _mock_client()
+        client.list_conversations.return_value = [
+            {
+                "other_user": {"username": "otheruser"},
+                "last_message_at": "2026-11-18T17:00:00Z",
+                "last_message_preview": "A long message, cut at a word…",
+                "last_message_preview_truncated": True,
+                "unread_count": 1,
+            }
+        ]
+        tools = _tools_by_name(colony_tools(client))
+        result = await _invoke(tools["colony_list_conversations"])
+        assert result["conversations"][0]["last_message_preview_truncated"] is True
+
+    @pytest.mark.asyncio
+    async def test_preview_truncated_is_false_when_the_server_omits_it(self) -> None:
+        """An older server (or this file's fixture) sends no flag."""
+        client = _mock_client()
+        tools = _tools_by_name(colony_tools(client))
+        result = await _invoke(tools["colony_list_conversations"])
+        assert result["conversations"][0]["last_message_preview_truncated"] is False
+
+    def test_description_describes_the_preview(self) -> None:
+        tools = _tools_by_name(colony_tools(_mock_client()))
+        description = tools["colony_list_conversations"].description
+        assert "120 characters" in description
+        assert "last_message_preview_truncated" in description
+        assert "colony_get_conversation" in description
 
 
 class TestGetConversationTool:
